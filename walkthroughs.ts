@@ -528,21 +528,14 @@ function buildWalkthroughPrompt(params: {
 }): string {
   const { finding, findingsPath, outputPath, modelLabel, cwd } = params;
   const findingText = `${finding.heading}\n${finding.body}`.trim();
-  return `You are producing an annotated code walkthrough for a single consolidated finalcheck finding.
-
-Finding ID: ${finding.id}
-Source findings file: ${findingsPath}
-Assigned output file: ${outputPath}
-Your assigned model: ${modelLabel}
-Repository root (cwd): ${cwd}
-
-Below is the verbatim text of finding ${finding.id} extracted from ${findingsPath}:
+  return `Investigate and output to ${outputPath} an annotated code walkthrough to illustrate the issue in the finding below.
 
 <finding id="${finding.id}">
 ${findingText}
 </finding>
 
-Your task:
+
+Instructions:
 1. Read the source files referenced by the finding to confirm understanding. Use grep/find/ls/language servers as needed to locate related code.
 2. Use full path filenames and line numbers for all referenced code.
 3. **Consult the context MCP** to gather architectural / specification / requirement context for the affected area. At minimum, search for related requirements (e.g. \`req:ORG-MEMB-*\`), learnings, and skills relevant to the files touched by the finding. The context MCP is reached via the \`mcp\` proxy tool: start with \`mcp({ server: "context" })\` to list tools, then call relevant ones (e.g. \`mcp({ tool: "query", args: "{...}" })\`, \`mcp({ tool: "find_skills", args: "{...}" })\`, \`mcp({ tool: "load_skill", args: "{...}" })\`). Cite the specific Context MCP entries you used.
