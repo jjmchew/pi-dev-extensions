@@ -77,6 +77,8 @@ import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
  * Usage:
  *   /dual-finalcheck                                     run with all defaults
  *   /dual-finalcheck --out-dir .pi/finalcheck            put all output under that directory
+ *   /dual-finalcheck --base develop                      diff against 'develop' instead of 'main'
+ *   /dual-finalcheck --base v1.2.0                       diff against a tag or commit SHA
  *   /dual-finalcheck --anthropic anthropic/claude-opus-4-7
  *   /dual-finalcheck --gpt openai-codex/gpt-5.5
  *   /dual-finalcheck --fallback-b anthropic/claude-opus-4-7:high
@@ -98,6 +100,12 @@ import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
  *     debug .jsonl files when debug mode is on. Defaults to the parent pi's
  *     cwd. Both relative (resolved against parent cwd) and absolute paths
  *     are accepted. The directory is created if it does not exist.
+ *
+ *   --base <ref>
+ *     Git base ref to diff against. The reviewed range is
+ *     merge-base(HEAD, base)..HEAD. Accepts a branch name, tag, or commit
+ *     SHA. For each, `origin/<ref>` is tried first, then `<ref>` directly.
+ *     Default: main.
  *
  *   --anthropic <spec>
  *     Override reviewer A. Default: anthropic/claude-opus-4-7
@@ -426,12 +434,12 @@ async function git(cwd: string, args: string[], signal?: AbortSignal): Promise<s
 	return result.stdout.trim();
 }
 
-async function collectGitMetadata(cwd: string, signal?: AbortSignal): Promise<GitMetadata> {
+async function collectGitMetadata(cwd: string, base: string, signal?: AbortSignal): Promise<GitMetadata> {
 	let baseSha: string;
 	try {
-		baseSha = await git(cwd, ["merge-base", "HEAD", "origin/main"], signal);
+		baseSha = await git(cwd, ["merge-base", "HEAD", `origin/${base}`], signal);
 	} catch {
-		baseSha = await git(cwd, ["merge-base", "HEAD", "main"], signal);
+		baseSha = await git(cwd, ["merge-base", "HEAD", base], signal);
 	}
 	const headSha = await git(cwd, ["rev-parse", "HEAD"], signal);
 	const stat = await git(cwd, ["diff", "--stat", baseSha, headSha], signal);
@@ -1110,6 +1118,12 @@ export default function dualFinalcheck(pi: ExtensionAPI) {
 						"Directory for findingsA.md, findingsB.md, findingsC.md. Defaults to the current working directory.",
 				}),
 			),
+			base: Type.Optional(
+				Type.String({
+					description:
+						"Git base ref to diff against. The reviewed range is merge-base(HEAD, base)..HEAD. Accepts a branch name, tag, or commit SHA. Default: main.",
+				}),
+			),
 			anthropic: Type.Optional(
 				Type.String({
 					description:
@@ -1158,6 +1172,7 @@ export default function dualFinalcheck(pi: ExtensionAPI) {
 			const specC = parseModelSpec(params.consolidator, specA);
 			const resume = params.resume !== false;
 			const debug = params.debug !== false;
+			const base = params.base && params.base.trim() ? params.base.trim() : "main";
 			const outDir = params.outDir
 				? isAbsolute(params.outDir)
 					? params.outDir
@@ -1255,7 +1270,7 @@ export default function dualFinalcheck(pi: ExtensionAPI) {
 
 			emit(true);
 
-			const gitMeta = await collectGitMetadata(ctx.cwd, signal);
+			const gitMeta = await collectGitMetadata(ctx.cwd, base, signal);
 			details.baseSha = gitMeta.baseSha;
 			details.headSha = gitMeta.headSha;
 			details.phase = "reviewing";
@@ -1428,10 +1443,12 @@ export default function dualFinalcheck(pi: ExtensionAPI) {
 			const fallbackB = args?.fallbackB === "" ? "(disabled)" : args?.fallbackB || "anthropic/claude-opus-4-6:xhigh";
 			const c = args?.consolidator || a;
 			const outDir = args?.outDir || "(cwd)";
+			const base = args?.base || "main";
 			let text = theme.fg("toolTitle", theme.bold("dual_finalcheck"));
 			text += `\n  A: ${theme.fg("accent", a)}`;
 			text += `\n  B: ${theme.fg("accent", b)} ${theme.fg("dim", `(fallback: ${fallbackB})`)}`;
 			text += `\n  C: ${theme.fg("accent", c)}`;
+			text += `\n  base: ${theme.fg("accent", base)}`;
 			text += `\n  out: ${theme.fg("dim", outDir)}`;
 			return new Text(text, 0, 0);
 		},
@@ -1515,6 +1532,7 @@ export default function dualFinalcheck(pi: ExtensionAPI) {
 
 interface CommandArgs {
 	outDir?: string;
+	base?: string;
 	anthropic?: string;
 	gpt?: string;
 	fallbackB?: string;
@@ -1536,6 +1554,8 @@ function parseCommandArgs(raw: string): CommandArgs {
 		};
 		if (token === "--out-dir") out.outDir = readValue(token);
 		else if (token.startsWith("--out-dir=")) out.outDir = token.slice("--out-dir=".length);
+		else if (token === "--base") out.base = readValue(token);
+		else if (token.startsWith("--base=")) out.base = token.slice("--base=".length);
 		else if (token === "--anthropic") out.anthropic = readValue(token);
 		else if (token.startsWith("--anthropic=")) out.anthropic = token.slice("--anthropic=".length);
 		else if (token === "--gpt") out.gpt = readValue(token);
@@ -1557,6 +1577,7 @@ function parseCommandArgs(raw: string): CommandArgs {
 function buildToolInvocationMessage(parsed: CommandArgs): string {
 	const argObj: Record<string, unknown> = {};
 	if (parsed.outDir) argObj.outDir = parsed.outDir;
+	if (parsed.base) argObj.base = parsed.base;
 	if (parsed.anthropic) argObj.anthropic = parsed.anthropic;
 	if (parsed.gpt) argObj.gpt = parsed.gpt;
 	if (parsed.noFallback) argObj.fallbackB = "";
