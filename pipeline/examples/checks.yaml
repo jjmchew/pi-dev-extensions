@@ -1,0 +1,39 @@
+# Example pipeline — copy to <project>/.pi/pipelines/checks.yaml
+#
+#   lint ∥ tests ∥ (shorten-comments → code-review)   then   file-bug-report
+#
+# Run it with:  /pipeline checks
+name: checks
+description: Lint + tests + comment cleanup + review
+
+sequence:
+  - parallel:
+      - shell: yarn lint
+        id: lint
+
+      - shell: yarn test:unit
+        id: tests
+        continueOnError: true # keep going so the review still runs
+
+      - sequence:
+          - llm:
+              skill: shorten-comments
+          - llm:
+              skill: code-review
+            id: review
+            outputVar: reviewText
+
+  # Only bother filing a bug when the failure smells flaky.
+  - llm:
+      skill: file-bug-report
+      args: "${steps.tests.stderr}"
+    when: failure(tests) && contains(steps.tests.stderr, "flaky")
+
+  - shell:
+      cmd: echo
+      args: ["${steps.review.vars.reviewText}"]
+    id: printReview
+    when: success(review)
+
+  - shell: rm -rf .tmp
+    when: always()

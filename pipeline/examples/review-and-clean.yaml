@@ -1,0 +1,35 @@
+# Lint ∥ unit tests ∥ dual-finalcheck, then clean up the review scratch files.
+#
+# Copy to <project>/.pi/pipelines/review-and-clean.yaml and run:
+#   /pipeline review-and-clean
+#
+# The cleanup step lives inside the same parallel branch as the review, so it
+# fires as soon as dual-finalcheck finishes instead of waiting for lint/tests.
+# `when: always()` means it also runs when the review step fails or is
+# cancelled, so scratch files never leak.
+name: review-and-clean
+description: yarn lint + yarn test:unit + /dual-finalcheck in parallel, then tidy up
+
+parallel:
+  failFast: false # let every branch finish; the summary reports all failures
+  children:
+    - shell: yarn lint
+      id: lint
+      continueOnError: true
+
+    - shell: yarn test:unit
+      id: tests
+      continueOnError: true
+
+    - sequence:
+        - llm:
+            command: dual-finalcheck
+          id: review
+          timeoutMs: 3600000 # two reviewers + a consolidator; give it an hour
+          continueOnError: true
+          outputVar: reviewSummary
+
+        # findingsC.md is the consolidated output and is deliberately kept.
+        - shell: rm -f findingsA.md findingsB.md .dual-finalcheck-A.jsonl .dual-finalcheck-B.jsonl .dual-finalcheck-C.jsonl
+          id: cleanup
+          when: always()

@@ -1,0 +1,44 @@
+# Nested loops — exercises the `${loops.<outerId>.…}` accessor.
+#
+# Outer loop retries a whole "propose → poll" phase up to 3 times. Inner loop
+# polls a status endpoint until it stops saying PENDING (up to 10 tries).
+#
+# Requires the `loop:` composer (see docs/loop-spec.md).
+name: nested-loop-demo
+
+sequence:
+  - loop:
+      id: attempt
+      maxIterations: 3
+      until: contains(steps.poll.output, "READY")
+      onMaxIterations: fail
+      body:
+        sequence:
+          - shell: ./scripts/propose.sh
+            id: propose
+            outputVar: proposalId
+
+          - loop:
+              id: wait
+              maxIterations: 10
+              # Inner condition — bare `probe` is the current inner iteration.
+              until: "!contains(steps.probe.output, \"PENDING\")"
+              body:
+                sequence:
+                  - shell:
+                      cmd: ./scripts/status.sh
+                      args:
+                        - "${steps.propose.vars.proposalId}"
+                        # Reach the outer loop by id.
+                        - "--attempt=${loops.attempt.iteration}"
+                        - "--wait=${loop.iteration}"
+                    id: probe
+                  - shell: sleep 1
+
+          # After the inner loop finishes, hoist its terminal probe result up
+          # to the outer scope so the outer `until:` can see it.
+          - shell:
+              cmd: printf
+              args: ["%s", "${steps.wait.vars.iterations}"]
+            id: poll
+            outputVar: result

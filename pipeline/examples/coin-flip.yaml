@@ -1,0 +1,48 @@
+# Simple loop demo — ask an LLM to pick a number between 1 and 1000, keep
+# asking until it picks one greater than 600.
+#
+# Run:   /pipeline coin-flip
+#
+# What to look for:
+#   - Each iteration the LLM prints a number (1..1000).
+#   - A tiny shell step tags it "BIG (<n>)" if > 600 else "SMALL (<n>)".
+#     That tag is what the loop's `until:` condition matches on — the
+#     `when:` mini-language doesn't do arithmetic, so we lean on the shell
+#     for the comparison and use `contains()` to detect the tag.
+#   - The run stops the first time you see BIG.
+#   - The summary line reports how many tries it took.
+#   - Cap of 10 iterations. Given 600/1000 ≈ 40% chance, you should
+#     usually see BIG within the first 3–4 tries.
+name: coin-flip
+description: Ask an LLM for a number 1–1000; retry until it's > 600 (max 10 tries).
+
+sequence:
+  - loop:
+      id: gen
+      maxIterations: 10
+      until: contains(steps.check.output, "BIG")
+      body:
+        sequence:
+          - llm:
+              prompt: |
+                Pick a random integer between 1 and 1000 inclusive.
+                Reply with ONLY the number — no words, no punctuation, no explanation.
+            id: number
+            outputVar: n
+
+          - shell: |
+              n=$(printf '%s' "${steps.number.vars.n}" | tr -d '[:space:]')
+              if [ "$n" -gt 600 ] 2>/dev/null; then
+                echo "BIG ($n)"
+              else
+                echo "SMALL ($n)"
+              fi
+            id: check
+
+          - shell: 'echo "try $((${loop.iteration} + 1)): ${steps.check.output}"'
+
+  - shell: 'echo "Got a number > 600 after ${steps.gen.vars.iterations} try/tries."'
+    when: success(gen)
+
+  - shell: 'echo "No number > 600 in ${steps.gen.vars.iterations} tries — unlucky (or the LLM is stuck in a groove)."'
+    when: failure(gen)

@@ -31,8 +31,12 @@
  *
  * Usage:
  * - `pi -e ./sandbox` - sandbox enabled with default/config settings
- * - `pi -e ./sandbox --no-sandbox` - disable sandboxing
  * - `/sandbox` - show current sandbox configuration
+ *
+ * The sandbox is ALWAYS enabled. The `--no-sandbox` flag and a config
+ * `enabled: false` are ignored (they only emit a warning). If the sandbox
+ * cannot initialize (unsupported platform or init error), bash execution is
+ * blocked (fail-closed) rather than run unsandboxed.
  *
  * Setup:
  * 1. Copy sandbox/ directory to ~/.pi/agent/extensions/
@@ -216,7 +220,14 @@ export default function (pi: ExtensionAPI) {
 		label: "bash (sandboxed)",
 		async execute(id, params, signal, onUpdate, _ctx) {
 			if (!sandboxEnabled || !sandboxInitialized) {
-				return localBash.execute(id, params, signal, onUpdate);
+				// Fail closed: the sandbox is required, so we never fall back to
+				// unsandboxed execution. This blocks bash when the sandbox could
+				// not initialize (init error, or unsupported platform).
+				throw new Error(
+					"Sandbox is not active, so bash execution is blocked (fail-closed). " +
+						"The sandbox is required and cannot be disabled. Resolve the sandbox " +
+						"initialization error rather than bypassing it.",
+				);
 			}
 
 			const sandboxedBash = createBashTool(localCwd, {
@@ -232,26 +243,29 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("session_start", async (_event, ctx) => {
+		// Sandbox is always enabled. The --no-sandbox flag and the config
+		// `enabled: false` switch are intentionally ignored; they only produce
+		// a warning so anyone relying on the old behavior notices the change.
 		const noSandbox = pi.getFlag("no-sandbox") as boolean;
-
 		if (noSandbox) {
-			sandboxEnabled = false;
-			ctx.ui.notify("Sandbox disabled via --no-sandbox", "warning");
-			return;
+			ctx.ui.notify("--no-sandbox is ignored: the sandbox is always enabled", "warning");
 		}
 
 		const config = loadConfig(ctx.cwd);
-
-		if (!config.enabled) {
-			sandboxEnabled = false;
-			ctx.ui.notify("Sandbox disabled via config", "info");
-			return;
+		if (config.enabled === false) {
+			ctx.ui.notify("sandbox config 'enabled: false' is ignored: the sandbox is always enabled", "warning");
 		}
 
 		const platform = process.platform;
 		if (platform !== "darwin" && platform !== "linux") {
+			// Fail closed: without OS-level sandboxing we refuse to run bash
+			// rather than silently falling back to unsandboxed execution.
 			sandboxEnabled = false;
-			ctx.ui.notify(`Sandbox not supported on ${platform}`, "warning");
+			sandboxInitialized = false;
+			ctx.ui.notify(
+				`Sandbox not supported on ${platform}; bash execution is blocked (fail-closed)`,
+				"error",
+			);
 			return;
 		}
 
@@ -279,8 +293,14 @@ export default function (pi: ExtensionAPI) {
 			);
 			ctx.ui.notify("Sandbox initialized", "info");
 		} catch (err) {
+			// Fail closed: if initialization fails, bash execution is blocked
+			// (see the bash tool below) rather than running unsandboxed.
 			sandboxEnabled = false;
-			ctx.ui.notify(`Sandbox initialization failed: ${err instanceof Error ? err.message : err}`, "error");
+			sandboxInitialized = false;
+			ctx.ui.notify(
+				`Sandbox initialization failed; bash execution is blocked (fail-closed): ${err instanceof Error ? err.message : err}`,
+				"error",
+			);
 		}
 	});
 
@@ -298,7 +318,10 @@ export default function (pi: ExtensionAPI) {
 		description: "Show sandbox configuration",
 		handler: async (_args, ctx) => {
 			if (!sandboxEnabled) {
-				ctx.ui.notify("Sandbox is disabled", "info");
+				ctx.ui.notify(
+					"Sandbox is not active (initialization failed or unsupported platform); bash execution is blocked",
+					"warning",
+				);
 				return;
 			}
 

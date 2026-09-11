@@ -21,7 +21,9 @@ const EXISTING_PERMISSION_RULES: PermissionRule[] = [
   {
     id: "existing.rm-recursive",
     reason: "Recursive removal can delete large parts of the filesystem.",
-    pattern: /\brm\s+(?:-[\w-]*r[\w-]*f|-[\w-]*f[\w-]*r|--recursive)\b/i,
+    // Matches any recursive rm (the destructive part), including split flags
+    // (`rm -r -f`), combined flags (`rm -rf` / `-fr`), and `--recursive`.
+    pattern: /\brm\b[^\n;&|]*?\s-(?:[a-z]*r[a-z]*|-recursive)\b/i,
   },
   {
     id: "existing.sudo",
@@ -92,7 +94,8 @@ const ADDITIONAL_SAFETY_RULES: PermissionRule[] = [
   {
     id: "safety.network.curl-pipe-shell",
     reason: "Piping downloaded content into a shell can execute untrusted code.",
-    pattern: /\b(?:curl|wget)\b[\s\S]*\|\s*(?:sh|bash|zsh|fish)\b/i,
+    // Catches both `curl … | sh` and process substitution `sh <(curl …)`.
+    pattern: /\b(?:curl|wget)\b[\s\S]*\|\s*(?:sh|bash|zsh|fish)\b|\b(?:sh|bash|zsh|fish)\b[\s\S]*<\(\s*(?:curl|wget)\b/i,
   },
   {
     id: "safety.network.upload",
@@ -123,7 +126,8 @@ const ADDITIONAL_SAFETY_RULES: PermissionRule[] = [
 
 const PERMISSION_RULES = [...EXISTING_PERMISSION_RULES, ...ADDITIONAL_SAFETY_RULES];
 
-function matchedRule(command: string): PermissionRule | undefined {
+// Exported for regression tests (see guardrails.test.ts).
+export function matchedRule(command: string): PermissionRule | undefined {
   return PERMISSION_RULES.find((rule) => rule.pattern.test(command));
 }
 

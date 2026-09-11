@@ -1,0 +1,216 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://pi.dev/schemas/pipeline.v1.json",
+  "title": "pi pipeline",
+  "description": "Editor autocomplete only — the runtime validation lives in parsers/yaml.ts and core/validate.ts. See docs/syntax-reference.md for the authoritative surface.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "name": { "type": "string", "description": "Pipeline name (defaults to the file name)" },
+    "description": { "type": "string" },
+    "cwd": { "type": "string", "description": "Working directory; relative paths resolve against the invocation cwd" },
+    "env": { "$ref": "#/definitions/env" },
+    "runsDir": { "type": "string", "description": "Override where run logs are written" },
+    "timeoutMs": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "description": "Reserved; day one honored only as a CLI/tool argument (run_pipeline({ timeoutMs }) or /pipeline --timeout)"
+    },
+    "sequence": { "$ref": "#/definitions/children" },
+    "parallel": { "$ref": "#/definitions/parallel" }
+  },
+  "oneOf": [{ "required": ["sequence"] }, { "required": ["parallel"] }],
+  "definitions": {
+    "env": {
+      "type": "object",
+      "additionalProperties": { "type": ["string", "number", "boolean"] }
+    },
+    "children": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/node" }
+    },
+    "parallel": {
+      "oneOf": [
+        { "$ref": "#/definitions/children" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["children"],
+          "properties": {
+            "failFast": { "type": "boolean", "description": "Abort outstanding siblings on the first failure" },
+            "maxConcurrency": { "type": "number", "exclusiveMinimum": 0, "description": "Default 8" },
+            "children": { "$ref": "#/definitions/children" }
+          }
+        }
+      ]
+    },
+    "node": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "A composer OR a step. Step knobs are sibling keys — never nested inside shell:/llm:.",
+      "properties": {
+        "sequence": { "$ref": "#/definitions/children" },
+        "parallel": { "$ref": "#/definitions/parallel" },
+        "loop": { "$ref": "#/definitions/loop" },
+        "shell": { "$ref": "#/definitions/shell" },
+        "llm": { "$ref": "#/definitions/llm" },
+        "id": {
+          "type": "string",
+          "pattern": "^(?!s[0-9]+$).+$",
+          "description": "Explicit id; required to reference this step from when: / ${steps.…}. Ids matching /^s\\d+$/ collide with the auto-id namespace and are rejected."
+        },
+        "cwd": { "type": "string" },
+        "env": { "$ref": "#/definitions/env" },
+        "timeoutMs": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "SIGTERM the step after N ms; SIGKILL after abortGraceMs (default 2000)."
+        },
+        "continueOnError": {
+          "type": "boolean",
+          "description": "On failure, sequence: keeps walking. Run status may become 'partial'."
+        },
+        "when": {
+          "type": "string",
+          "description": "Gating expression: success/failure/skipped/always/never/contains/equals/matches, && || ! ( ). No arithmetic, no user-defined helpers."
+        },
+        "outputVar": {
+          "type": "string",
+          "description": "Capture the primary output at steps.<id>.vars.<name>. For shell that's the stdout tail; for llm it's the final assistant text."
+        }
+      }
+    },
+    "loop": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["maxIterations", "body"],
+      "oneOf": [{ "required": ["until"] }, { "required": ["while"] }],
+      "description": "Repeat body until (or while) an expression evaluates true/false. Body is a single node — wrap in sequence: for multiple.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^(?!s[0-9]+$).+$",
+          "description": "Explicit loop id. Required to reach specific iterations from outside (steps.<id>.<N>.<bodyStepId>.<field>) or via ${loops.<id>.…} from a nested loop."
+        },
+        "maxIterations": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "description": "Hard cap on iteration count."
+        },
+        "minIterations": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Don't evaluate the stop condition until this many iterations have completed. Default 0."
+        },
+        "until": {
+          "type": "string",
+          "description": "Stop expression — same grammar as when:. Loop stops when this becomes true. Mutually exclusive with while:."
+        },
+        "while": {
+          "type": "string",
+          "description": "Stop expression — same grammar as when:. Loop stops when this becomes false (do/while semantics). Mutually exclusive with until:."
+        },
+        "onMaxIterations": {
+          "type": "string",
+          "enum": ["fail", "continue"],
+          "default": "fail",
+          "description": "What to do when the cap is hit without the condition firing."
+        },
+        "body": {
+          "$ref": "#/definitions/node",
+          "description": "A single node (composer or step). Use sequence: to run multiple steps per iteration."
+        }
+      }
+    },
+    "shell": {
+      "oneOf": [
+        {
+          "type": "string",
+          "description": "Run via /bin/sh -c (pipes, globs, redirection work). Values from ${…} are substituted before the shell sees them — beware quoting."
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["cmd"],
+          "description": "Direct execvp; no shell involved. Safe for ${…} values with metacharacters.",
+          "properties": {
+            "cmd": { "type": "string" },
+            "args": { "type": "array", "items": { "type": "string" } },
+            "env": { "$ref": "#/definitions/env" }
+          }
+        }
+      ]
+    },
+    "llm": {
+      "oneOf": [
+        {
+          "type": "string",
+          "description": "Shorthand for { prompt: <text> }."
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "oneOf": [
+            { "required": ["skill"] },
+            { "required": ["command"] },
+            { "required": ["prompt"] },
+            { "required": ["promptFile"] }
+          ],
+          "description": "Runs one isolated agent turn in a fresh sub-pi. Exactly one of skill/command/prompt/promptFile is required.",
+          "properties": {
+            "skill": {
+              "type": "string",
+              "description": "Runs `/skill:<name> <args>` in a fresh sub-pi."
+            },
+            "command": {
+              "type": "string",
+              "description": "Runs a pi-registered slash command as `/<name> <args>` in a fresh sub-pi."
+            },
+            "prompt": {
+              "type": "string",
+              "description": "Verbatim prompt text. If `args` is also set, it is appended after a blank line."
+            },
+            "promptFile": {
+              "type": "string",
+              "description": "Path to a .md/.txt prompt template read at plan time. Relative paths resolve against the pipeline file. The sha256 is recorded in step.json/plan.json."
+            },
+            "args": {
+              "type": "string",
+              "description": "Appended to /skill:… or /<command>… invocations, or joined onto `prompt` with a blank line."
+            },
+            "model": {
+              "type": "string",
+              "description": "provider/id[:thinking] — e.g. anthropic/claude-opus-4-8 or openai-codex/gpt-5.5:high."
+            },
+            "reasoning": {
+              "type": "string",
+              "enum": ["low", "medium", "high", "xhigh"],
+              "description": "Sugar: appended to `model` as :<level> unless `model` already carries a ':'."
+            },
+            "tools": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Allowlist passed as --tools a,b,c."
+            },
+            "appendSystemPrompt": {
+              "type": "string",
+              "description": "Text appended to the sub-pi system prompt. Hashed as sha256:… in step_start/step_end so secrets don't leak into logs."
+            },
+            "mode": {
+              "type": "string",
+              "enum": ["oneshot", "rpc"],
+              "default": "oneshot",
+              "description": "oneshot runs `pi --mode json -p --no-session`. rpc runs `pi --mode rpc` and blocks the step until a /pipeline:chat pane calls finalize()."
+            },
+            "nonInteractiveFallback": {
+              "type": "string",
+              "enum": ["error", "oneshot"],
+              "default": "error",
+              "description": "Only meaningful with mode: rpc. `error` hard-fails when no UI is attached; `oneshot` degrades to a plain oneshot turn."
+            }
+          }
+        }
+      ]
+    }
+  }
+}

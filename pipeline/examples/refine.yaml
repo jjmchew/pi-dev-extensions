@@ -1,0 +1,44 @@
+# Worked example from docs/loop-spec.md.
+#
+#   seed → loop(revise → judge)  until judge says APPROVED   (max 4 tries)
+#        → print iteration 2's revision
+#
+# Copy to <project>/.pi/pipelines/refine.yaml. Requires the `loop:` composer
+# (see docs/loop-spec.md).
+name: refine-review
+description: Draft, then refine until a judge approves (or we give up).
+
+sequence:
+  - llm:
+      skill: draft
+    id: seed
+    outputVar: text
+
+  - loop:
+      id: refine
+      maxIterations: 4
+      until: contains(steps.check.output, "APPROVED")
+      body:
+        sequence:
+          - llm:
+              skill: revise
+              # On iteration 0 there is no previous revision — fall back to seed.
+              args: "${loop.previous.revise.vars.draft ?? steps.seed.vars.text}"
+            id: revise
+            outputVar: draft
+          - llm:
+              skill: judge
+              args: "${steps.revise.vars.draft}"
+            id: check
+
+  # Reach into a specific iteration from outside the loop.
+  - shell:
+      cmd: printf
+      args: ["%s\n", "${steps.refine.2.revise.vars.draft}"]
+    when: success(refine)
+
+  # Fallback path when the loop hit its cap without approval.
+  - llm:
+      skill: file-bug-report
+      args: "gave up after ${steps.refine.vars.iterations} tries"
+    when: failure(refine) && equals(steps.refine.vars.stopped, "maxIterations")
