@@ -50,7 +50,7 @@ describe("YAML surface → IR mapping", () => {
 
   it("step knobs sit next to the kind key", () => {
     const plan = parse(
-      `sequence:\n  - shell: yarn test\n    id: tests\n    continueOnError: true\n    outputVar: testLog\n    when: always()\n    timeoutMs: 5000\n    cwd: sub\n    env: { CI: "1" }\n`,
+      `sequence:\n  - shell: yarn test\n    id: tests\n    continueOnError: true\n    outputVar: testLog\n    when: always()\n    timeoutMs: 5000\n    idleTimeoutMs: 1500\n    cwd: sub\n    env: { CI: "1" }\n`,
     );
     expect((plan.root as any).children[0].step).toMatchObject({
       id: "tests",
@@ -59,6 +59,7 @@ describe("YAML surface → IR mapping", () => {
       outputVar: "testLog",
       when: "always()",
       timeoutMs: 5000,
+      idleTimeoutMs: 1500,
       cwd: "sub",
       env: { CI: "1" },
     });
@@ -150,6 +151,7 @@ describe("parse errors", () => {
     ["empty shell", `sequence:\n  - shell: ""\n`, /may not be empty/],
     ["auto-id collision", `sequence:\n  - shell: a\n    id: s3\n`, /auto-id namespace/],
     ["bad timeout", `sequence:\n  - shell: a\n    timeoutMs: -1\n`, /positive number/],
+    ["bad idle timeout", `sequence:\n  - shell: a\n    idleTimeoutMs: 0\n`, /positive number/],
     ["knobs on composer", `sequence:\n  - parallel: []\n    when: always()\n`, /unexpected key/],
     ["non-mapping item", `sequence:\n  - just a string\n`, /must be a mapping/],
     ["unknown kind", `sequence:\n  - http: { url: x }\n`, /no step kind or composer found/],

@@ -142,6 +142,7 @@ All step knobs sit **as sibling keys**, never inside `shell:` / `llm:`:
   cwd: packages/api          # relative to the invocation cwd
   env: { CI: "1" }
   timeoutMs: 300000          # SIGTERM after N ms; SIGKILL after abortGraceMs
+  idleTimeoutMs: 60000       # abort if no event is emitted for N ms
   continueOnError: true      # sequence keeps walking, run may still be "ok"
   when: always()             # gating expression, see §3
   outputVar: testLog         # capture the step's output at steps.tests.vars.testLog
@@ -153,6 +154,7 @@ All step knobs sit **as sibling keys**, never inside `shell:` / `llm:`:
 | `cwd` | string | Precedence: step `cwd` > plan `cwd` > invocation cwd. Relative → resolved against the invocation cwd. |
 | `env` | mapping | Merged as `process.env ⊕ plan.env ⊕ step.env` (later wins). Non-scalar values rejected. |
 | `timeoutMs` | positive number | Applied via a per-step `AbortController`; the details also carry `timedOut: true`. |
+| `idleTimeoutMs` | positive number | Aborts the step if no event is emitted by the executor for this many ms. The timer is armed at step start and reset on every yielded event (except the terminal `step_end`). On expiry the step ends with `ok: false`, `timedOut: true`, and `idleTimedOut: true`. Useful for LLM steps: catches a stuck child (e.g. a hung MCP tool call) that would otherwise pin the step against `timeoutMs`. |
 | `continueOnError` | boolean | On failure, `sequence:` keeps going; the step still counts as a failure in the totals (run status may be `partial`). |
 | `when` | string expression | See §3. Parsed at load time. |
 | `outputVar` | non-empty string | Captures `details.output` into `steps.<id>.vars.<name>`. For shell that's the **tail** of stdout (see §4). For llm it's the final assistant text. |

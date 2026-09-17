@@ -60,6 +60,14 @@ export type Step = {
   cwd?: string;
   env?: Env;
   timeoutMs?: number;
+  /**
+   * Wall-clock inactivity guard: abort the step if no event is emitted by
+   * the executor for this many ms. Reset on every yielded event other than
+   * the terminal `step_end`. Complements `timeoutMs` — catches a stuck tool
+   * call (e.g. a hung MCP `connect`) that would otherwise pin an LLM step
+   * against its outer wall clock.
+   */
+  idleTimeoutMs?: number;
   continueOnError?: boolean;
   when?: string;
   outputVar?: string;
@@ -118,6 +126,7 @@ export type StepEndDetails = {
   skipped?: boolean;
   aborted?: boolean;
   timedOut?: boolean;
+  idleTimedOut?: boolean;
   exitCode?: number;
   durationMs?: number;
   output?: string;

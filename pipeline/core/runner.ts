@@ -193,6 +193,7 @@ export function runPlan(plan: Plan, opts: RunPlanOptions): AsyncGenerator<StepEv
     if (signal.aborted) stepController.abort(signal.reason);
     else signal.addEventListener("abort", onParentAbort, { once: true });
     let timedOut = false;
+    let idleTimedOut = false;
     const timer = step.timeoutMs
       ? setTimeout(() => {
           timedOut = true;
@@ -200,6 +201,27 @@ export function runPlan(plan: Plan, opts: RunPlanOptions): AsyncGenerator<StepEv
         }, step.timeoutMs)
       : undefined;
     timer?.unref?.();
+
+    // Idle timer: fires if the executor stops yielding events. Reset on
+    // every non-terminal event below. Guards against a stuck child (e.g. an
+    // MCP tool call that never returns) that would otherwise pin the step
+    // against `timeoutMs`.
+    let idleTimer: ReturnType<typeof setTimeout> | undefined;
+    const armIdleTimer = () => {
+      if (!step.idleTimeoutMs) return;
+      idleTimer = setTimeout(() => {
+        idleTimedOut = true;
+        stepController.abort(
+          new Error(`step "${step.id}" idle timeout: no events for ${step.idleTimeoutMs}ms`),
+        );
+      }, step.idleTimeoutMs);
+      idleTimer?.unref?.();
+    };
+    const resetIdleTimer = () => {
+      if (idleTimer) clearTimeout(idleTimer);
+      armIdleTimer();
+    };
+    armIdleTimer();
 
     const stepCtx: StepContext = {
       ...ctx,
@@ -218,11 +240,19 @@ export function runPlan(plan: Plan, opts: RunPlanOptions): AsyncGenerator<StepEv
           sawEnd = true;
           const details: StepEndDetails = { ...((evt.details ?? {}) as StepEndDetails) };
           if (timedOut) details.timedOut = true;
+          if (idleTimedOut) {
+            details.timedOut = true;
+            details.idleTimedOut = true;
+            if (!details.error) {
+              details.error = `idle timeout: no events from executor for ${step.idleTimeoutMs}ms`;
+            }
+          }
           if (step.outputVar) details.outputVarName = step.outputVar;
           const finalEvt = { ...evt, details } as Extract<StepEvent, { type: "step_end" }>;
           recordEnd(step, finalEvt);
           emit(finalEvt);
         } else {
+          resetIdleTimer();
           emit(evt);
         }
       }
@@ -249,6 +279,7 @@ export function runPlan(plan: Plan, opts: RunPlanOptions): AsyncGenerator<StepEv
       }
     } finally {
       if (timer) clearTimeout(timer);
+      if (idleTimer) clearTimeout(idleTimer);
       signal.removeEventListener("abort", onParentAbort);
     }
 

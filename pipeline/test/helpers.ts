@@ -11,6 +11,8 @@ export type FakeSpec = {
   output?: string;
   usage?: { input: number; output: number; cost: number; turns: number };
   hang?: boolean;
+  /** While hanging, emit a heartbeat `progress` event every N ms. */
+  heartbeatMs?: number;
 };
 
 /** An executor whose behaviour is described by the step's config. */
@@ -24,10 +26,25 @@ export const fakeExecutor: StepExecutor<FakeSpec> = {
     const started = Date.now();
     let aborted = false;
     if (cfg.hang) {
-      await new Promise<void>((resolve) => {
-        if (ctx.signal.aborted) return resolve();
-        ctx.signal.addEventListener("abort", () => resolve(), { once: true });
-      });
+      // Optionally emit a periodic heartbeat while hanging, so an outer
+      // idle-timeout test can distinguish "stuck with no events" from
+      // "stuck but still yielding progress".
+      while (!ctx.signal.aborted) {
+        const tick = cfg.heartbeatMs ?? 0;
+        const waitMs = tick > 0 ? tick : 60_000;
+        await new Promise<void>((resolve) => {
+          const timer = setTimeout(resolve, waitMs);
+          const onAbort = () => {
+            clearTimeout(timer);
+            resolve();
+          };
+          ctx.signal.addEventListener("abort", onAbort, { once: true });
+        });
+        if (ctx.signal.aborted) break;
+        if (tick > 0) {
+          yield { type: "progress", stepId: step.id, data: { heartbeat: true } };
+        }
+      }
       aborted = true;
     } else if (cfg.delayMs) {
       await new Promise((r) => setTimeout(r, cfg.delayMs));

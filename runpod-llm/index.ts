@@ -294,6 +294,17 @@ function getLegacyModelField<T>(modelId: string, field: string): T | undefined {
 	return entry?.[field] as T | undefined;
 }
 
+function getLegacyModelApiKey(modelId: string): string | undefined {
+	// Per-model key for pods whose LiteLLM master key differs from the provider's.
+	// The raw value wins if set; otherwise the name of a set env var is resolved.
+	const raw = getLegacyModelField<string>(modelId, "apiKey");
+	if (typeof raw !== "string" || !raw.trim()) return undefined;
+	if (raw.startsWith("$")) {
+		return process.env[raw.slice(1)] || undefined;
+	}
+	return raw;
+}
+
 function getProviderBaseUrl(): string {
 	const url = getLegacyProviderField<string>("baseUrl");
 	if (!url) {
@@ -336,7 +347,10 @@ function buildRequestBody(model: Model<Api>, context: Context, options: SimpleSt
 	// from the session thinking level (--thinking / defaultThinkingLevel) and leaves it
 	// undefined when the level is "off".
 	const reasoningEnabled = model.reasoning === true;
-	const thinkingLevel = options?.reasoning; // "minimal"|"low"|"medium"|"high"|"xhigh" | undefined
+	const thinkingLevel = options?.reasoning; // "minimal"|"low"|"medium"|"high"|"xhigh"|"max" | undefined
+	const mappedThinkingLevel = thinkingLevel
+		? (model.thinkingLevelMap?.[thinkingLevel] ?? thinkingLevel)
+		: undefined;
 	// vLLM/SGLang chat-template models (Kimi/Qwen) toggle thinking via
 	// chat_template_kwargs.enable_thinking; native reasoning models (DeepSeek) think
 	// by default and only take reasoning_effort.
@@ -366,8 +380,9 @@ function buildRequestBody(model: Model<Api>, context: Context, options: SimpleSt
 			body.reasoning_effort = "none";
 		}
 	} else if (reasoningEnabled) {
-		// Native reasoning models (e.g. DeepSeek) think by default; forward the requested effort when set.
-		if (thinkingLevel) body.reasoning_effort = thinkingLevel;
+		// Native reasoning models (e.g. DeepSeek) think by default; forward the
+		// model-specific mapped effort when set.
+		if (mappedThinkingLevel) body.reasoning_effort = mappedThinkingLevel;
 	}
 	return body;
 }
@@ -395,7 +410,7 @@ function streamRunpodLiteLLM(model: Model<Api>, context: Context, options?: Simp
 		};
 
 		try {
-			const apiKey = options?.apiKey;
+			const apiKey = getLegacyModelApiKey(model.id) || options?.apiKey;
 			if (!apiKey) throw new Error("Missing RunPod LiteLLM API key. Set RUNPOD_LITELLM_API_KEY, or configure this provider with an apiKey.");
 
 			stream.push({ type: "start", partial: output });
@@ -522,6 +537,15 @@ export default function (pi: ExtensionAPI) {
 				name: "DeepSeek V4.1 Flash (RunPod)",
 				baseUrl: getLegacyModelField<string>("deepseek-ai/DeepSeek-V4.1-Flash", "baseUrl"),
 				reasoning: true,
+				// This endpoint rejects Pi's "minimal" and "medium" effort names.
+				thinkingLevelMap: {
+					minimal: "low",
+					low: "low",
+					medium: "high",
+					high: "high",
+					xhigh: "xhigh",
+					max: "max",
+				},
 				input: ["text"],
 				contextWindow: 262_144,
 				maxTokens: 65_536,

@@ -162,6 +162,34 @@ describe("timeouts and abort", () => {
     expect((end.details as any).timedOut).toBe(true);
   });
 
+  it("aborts a step whose executor stops yielding events (idleTimeoutMs)", async () => {
+    const p = plan({
+      kind: "sequence",
+      children: [step("stuck", { hang: true }, { idleTimeoutMs: 30 })],
+    });
+    const events = await collect(runPlan(p, { ctx: makeCtx() }));
+    const end = endsOf(events)[0]!;
+    expect(end.ok).toBe(false);
+    expect((end.details as any).idleTimedOut).toBe(true);
+    expect((end.details as any).timedOut).toBe(true);
+    expect(String((end.details as any).error)).toMatch(/idle timeout/);
+  });
+
+  it("idleTimeoutMs is reset by each yielded event", async () => {
+    // Heartbeat every 15ms keeps the 40ms idle timer alive; hard timeoutMs
+    // still trips at 80ms.
+    const p = plan({
+      kind: "sequence",
+      children: [
+        step("alive", { hang: true, heartbeatMs: 15 }, { idleTimeoutMs: 40, timeoutMs: 80 }),
+      ],
+    });
+    const events = await collect(runPlan(p, { ctx: makeCtx() }));
+    const end = endsOf(events)[0]!;
+    expect((end.details as any).idleTimedOut).toBeUndefined();
+    expect((end.details as any).timedOut).toBe(true);
+  });
+
   it("run-level abort produces status aborted", async () => {
     const controller = new AbortController();
     const p = plan({ kind: "sequence", children: [step("slow", { hang: true }), step("next")] });
