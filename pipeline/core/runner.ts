@@ -234,7 +234,8 @@ export function runPlan(plan: Plan, opts: RunPlanOptions): AsyncGenerator<StepEv
     try {
       const resolvedConfig = interpolateConfig(step.config, stepCtx, step.id);
       executor.validate?.(resolvedConfig);
-      const resolved: Step = { ...step, config: resolvedConfig };
+      const resolvedEnv = step.env ? interpolateConfig(step.env, stepCtx, step.id) : undefined;
+      const resolved: Step = { ...step, config: resolvedConfig, env: resolvedEnv };
       for await (const evt of executor.run(resolved as any, stepCtx)) {
         if (evt.type === "step_end") {
           sawEnd = true;

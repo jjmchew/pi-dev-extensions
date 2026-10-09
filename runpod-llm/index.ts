@@ -372,9 +372,9 @@ function buildRequestBody(model: Model<Api>, context: Context, options: SimpleSt
 	if (chatTemplateThinking) {
 		// Kimi/Qwen: explicit thinking toggle plus effort, forwarded through LiteLLM to
 		// the underlying vLLM/SGLang worker.
-		if (thinkingLevel) {
+		if (mappedThinkingLevel) {
 			body.chat_template_kwargs = { enable_thinking: true };
-			body.reasoning_effort = thinkingLevel;
+			body.reasoning_effort = mappedThinkingLevel;
 		} else {
 			body.chat_template_kwargs = { enable_thinking: false };
 			body.reasoning_effort = "none";
@@ -517,6 +517,15 @@ export default function (pi: ExtensionAPI) {
 				name: "Kimi K3 (RunPod)",
 				baseUrl: getLegacyModelField<string>("moonshotai/Kimi-K3", "baseUrl"),
 				reasoning: true,
+				// Kimi K3 only accepts "low", "high" and "max".
+				thinkingLevelMap: {
+					minimal: "low",
+					low: "low",
+					medium: "high",
+					high: "high",
+					xhigh: "max",
+					max: "max",
+				},
 				input: ["text"],
 				contextWindow: 430_000,
 				maxTokens: 65_536,

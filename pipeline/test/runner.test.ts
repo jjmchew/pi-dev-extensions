@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { computeRunStatus, runPlan } from "../core/runner.ts";
-import type { RunStatus, StepEvent } from "../core/types.ts";
+import { registerExecutor } from "../core/registry.ts";
+import type { RunStatus, Step, StepContext, StepEvent } from "../core/types.ts";
 import { collect, makeCtx, plan, setupRegistries, step, trace } from "./helpers.ts";
 
 beforeEach(setupRegistries);
@@ -214,6 +215,39 @@ describe("outputVar and usage aggregation", () => {
     const events = await collect(runPlan(p, { ctx }));
     expect(ctx.results.a!.vars).toEqual({ greeting: "hello" });
     expect(runEnd(events).totals.usage).toEqual({ input: 11, output: 7, cost: 0.15000000000000002, turns: 3 });
+  });
+});
+
+describe("step env interpolation", () => {
+  it("expands ${steps.…} / ${args} in step-level env at dispatch", async () => {
+    registerExecutor({
+      kind: "envecho",
+      resultFields: ["output"],
+      async *run(s: Step, _ctx: StepContext): AsyncGenerator<StepEvent> {
+        yield { type: "step_start", stepId: s.id, kind: "envecho", cwd: process.cwd(), config: s.config };
+        yield { type: "step_end", stepId: s.id, ok: true, details: { output: JSON.stringify(s.env) } };
+      },
+    });
+    const ctx = makeCtx({ args: "the-args" });
+    const p = plan({
+      kind: "sequence",
+      children: [
+        step("a", { output: "from-a" }),
+        {
+          kind: "step",
+          step: {
+            kind: "envecho",
+            id: "b",
+            explicitId: true,
+            path: "root.b",
+            config: {},
+            env: { FROM_A: "${steps.a.output}", ARGS: "${args}" },
+          },
+        },
+      ],
+    });
+    await collect(runPlan(p, { ctx }));
+    expect(JSON.parse(ctx.results.b!.output as string)).toEqual({ FROM_A: "from-a", ARGS: "the-args" });
   });
 });
 
