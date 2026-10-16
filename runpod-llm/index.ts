@@ -8,11 +8,14 @@ import {
 	calculateCost,
 	createAssistantMessageEventStream,
 	type Context,
+	getCurrentSystemPrompt,
+	getCurrentTools,
 	type Message,
 	type Model,
 	type SimpleStreamOptions,
 	type Tool,
 	type ToolCall,
+	type TranscriptContext,
 } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
@@ -66,14 +69,33 @@ function toolProtocolPrompt(tools: Tool[] | undefined): string {
 	return `\n\nTOOL-CALLING FALLBACK PROTOCOL:\nPrefer native OpenAI tool_calls. If for any reason you cannot emit them, respond with ONLY JSON in this exact shape:\n{"tool_calls":[{"name":"tool_name","arguments":{"arg":"value"}}]}\nAvailable tools:\n${toolList}`;
 }
 
-function convertMessages(context: Context): OpenAIMessage[] {
+type ResolvedContext = { systemPrompt: string; tools: Tool[]; messages: Message[] };
+
+// pi passes a TranscriptContext: the system prompt and tools live in `system`
+// messages inside the transcript, not in context.systemPrompt/context.tools.
+// Replay them into one leading prompt + current tool set, since the upstream
+// chat templates don't support mid-conversation system messages. The legacy
+// Context fields are still honored if a caller sets them.
+function resolveContext(context: Context | TranscriptContext): ResolvedContext {
+	const legacy = context as Partial<Context>;
+	const messages = context.messages as Message[];
+	const transcriptPrompt = getCurrentSystemPrompt(messages).trim();
+	const transcriptTools = getCurrentTools(messages);
+	return {
+		systemPrompt: transcriptPrompt || legacy.systemPrompt?.trim() || "",
+		tools: transcriptTools.length ? transcriptTools : (legacy.tools ?? []),
+		messages: messages.filter((message) => message.role !== "system"),
+	};
+}
+
+function convertMessages(context: ResolvedContext): OpenAIMessage[] {
 	const messages: OpenAIMessage[] = [];
-	const systemPrompt = `${context.systemPrompt?.trim() ?? ""}${toolProtocolPrompt(context.tools)}`.trim();
+	const systemPrompt = `${context.systemPrompt}${toolProtocolPrompt(context.tools)}`.trim();
 	if (systemPrompt) {
 		messages.push({ role: "system", content: systemPrompt });
 	}
 
-	for (const message of context.messages as Message[]) {
+	for (const message of context.messages) {
 		if (message.role === "user") {
 			const content = textFromContent(message.content);
 			if (content.trim()) messages.push({ role: "user", content });
@@ -331,7 +353,7 @@ function debugLog(entry: Record<string, unknown>) {
 	appendFileSync(join(configDir, "runpod-llm-debug.jsonl"), `${JSON.stringify({ timestamp: new Date().toISOString(), ...entry })}\n`);
 }
 
-function defaultToolChoice(_context: Context): "auto" | "required" {
+function defaultToolChoice(_context: ResolvedContext): "auto" | "required" {
 	// "auto" lets the model choose to call a tool OR stop and answer with text.
 	// Forcing "required" after a bash/read result traps the model: it can never
 	// terminate a turn with a plain answer, so it emits endless no-op bash calls.
@@ -339,7 +361,8 @@ function defaultToolChoice(_context: Context): "auto" | "required" {
 	return "auto";
 }
 
-function buildRequestBody(model: Model<Api>, context: Context, options: SimpleStreamOptions | undefined) {
+function buildRequestBody(model: Model<Api>, rawContext: Context | TranscriptContext, options: SimpleStreamOptions | undefined) {
+	const context = resolveContext(rawContext);
 	const maxTokens = Math.min(options?.maxTokens ?? DEFAULT_MAX_TOKENS, model.maxTokens ?? DEFAULT_MAX_TOKENS);
 	const tools = convertTools(context.tools);
 	const toolChoice = process.env.RUNPOD_KIMI_TOOL_CHOICE ?? defaultToolChoice(context);
@@ -387,7 +410,7 @@ function buildRequestBody(model: Model<Api>, context: Context, options: SimpleSt
 	return body;
 }
 
-function streamRunpodLiteLLM(model: Model<Api>, context: Context, options?: SimpleStreamOptions): AssistantMessageEventStream {
+function streamRunpodLiteLLM(model: Model<Api>, context: Context | TranscriptContext, options?: SimpleStreamOptions): AssistantMessageEventStream {
 	const stream = createAssistantMessageEventStream();
 
 	(async () => {
@@ -561,6 +584,18 @@ export default function (pi: ExtensionAPI) {
 				// pi-ai cost is per 1M tokens (models.js: cost / 1_000_000 * tokens).
 				// Proxy per-token rates → per-1M: 4e-8→0.04, 4e-7→0.4, 6e-9→0.006.
 				cost: { input: 0.04, output: 0.4, cacheRead: 0.006, cacheWrite: 0 },
+			},
+			{
+				id: "zai-org/GLM-5.3",
+				name: "GLM 5.3 (RunPod)",
+				baseUrl: getLegacyModelField<string>("zai-org/GLM-5.3", "baseUrl"),
+				// Always thinks (enable_thinking is ignored); accepts every effort level.
+				reasoning: true,
+				input: ["text"],
+				contextWindow: 262_144,
+				maxTokens: 65_536,
+				// Proxy per-token rates → per-1M: 1.4e-6→1.4, 4.4e-6→4.4, 2.6e-7→0.26.
+				cost: { input: 1.4, output: 4.4, cacheRead: 0.26, cacheWrite: 0 },
 			},
 		],
 		streamSimple: streamRunpodLiteLLM,

@@ -46,7 +46,8 @@
  */
 
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { SandboxManager, type SandboxRuntimeConfig } from "@anthropic-ai/sandbox-runtime";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -56,9 +57,43 @@ interface SandboxConfig extends SandboxRuntimeConfig {
 	enabled?: boolean;
 }
 
+// Files in ~/.ssh that ssh/git need to read and that hold no secrets.
+const SSH_READABLE = new Set(["known_hosts", "known_hosts.old", "config"]);
+
+// Deny every entry in ~/.ssh except known_hosts/config/*.pub, so `git fetch`
+// over SSH can verify host keys while private keys stay unreadable. Auth must
+// go through ssh-agent (see sshAgentSockets). Enumerated at load time, so keys
+// added later are only covered by the globs until pi restarts.
+function sshDenyRead(): string[] {
+	const deny = ["~/.ssh/*.pem", "~/.ssh/*.key"];
+	const dir = join(homedir(), ".ssh");
+	try {
+		for (const entry of readdirSync(dir)) {
+			if (SSH_READABLE.has(entry) || entry.endsWith(".pub")) continue;
+			deny.push(`~/.ssh/${entry}`);
+		}
+	} catch {
+		// Can't enumerate (e.g. missing or already sandboxed): deny the whole dir.
+		return ["~/.ssh"];
+	}
+	return deny;
+}
+
+// Allow the ssh-agent socket so SSH auth works without reading key files.
+function sshAgentSockets(): string[] {
+	const sock = process.env.SSH_AUTH_SOCK;
+	if (!sock) return [];
+	try {
+		return [realpathSync(sock)];
+	} catch {
+		return [sock];
+	}
+}
+
 const DEFAULT_CONFIG: SandboxConfig = {
 	enabled: true,
 	network: {
+		allowUnixSockets: sshAgentSockets(),
 		allowedDomains: [
 			"npmjs.org",
 			"*.npmjs.org",
@@ -74,7 +109,7 @@ const DEFAULT_CONFIG: SandboxConfig = {
 		deniedDomains: [],
 	},
 	filesystem: {
-		denyRead: ["~/.ssh", "~/.aws", "~/.gnupg"],
+		denyRead: [...sshDenyRead(), "~/.aws", "~/.gnupg"],
 		allowWrite: [".", "/tmp"],
 		denyWrite: [".env", ".env.*", "*.pem", "*.key"],
 	},
