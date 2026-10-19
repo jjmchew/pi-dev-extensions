@@ -11,8 +11,29 @@
       "*.github.com",
       "api.github.com",
       "raw.githubusercontent.com",
-      "api.us-east.tinybird.co"
+      "api.us-east.tinybird.co",
+      "aws.connect.psdb.cloud",
+      "proxy.golang.org",
+      "sum.golang.org"
     ],
     "deniedDomains": []
+  },
+  "filesystem": {
+    "allowWrite": [
+      ".",
+      "/tmp",
+      "~/rp/runpod/.bare",
+      "~/rp/main-ui/.bare"
+    ],
+    "denyWrite": [
+      ".env",
+      ".env.*",
+      "*.pem",
+      "*.key",
+      "~/rp/runpod/.bare/config",
+      "~/rp/runpod/.bare/hooks",
+      "~/rp/main-ui/.bare/config",
+      "~/rp/main-ui/.bare/hooks"
+    ]
   }
 }

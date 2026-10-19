@@ -123,6 +123,18 @@ describe("permission-gate: recursive rm scoped to cwd", () => {
 		["chained", "mkdir -p .tmp && rm -rf .tmp/x"],
 		["cd into subdir", "cd sub && rm -rf build"],
 		["split flags", "rm -r -f build"],
+		[
+			"after quoted python heredoc",
+			"python3 - <<'EOF'\ninv={1:\"doesn't (b) {x} $y\"}\ns=open('p.md').read()\nEOF\nrm -rf ./.tmp/rd.txt",
+		],
+		["after unquoted heredoc without expansion", "cat > .tmp/a.txt <<EOF\nit's {fine}\nEOF\nrm -rf .tmp/x"],
+		["after <<- heredoc", "cat <<-'END' > .tmp/a\n\tx (y)\n\tEND\nrm -rf .tmp/x"],
+		[
+			"after python -c with parens",
+			`gh api x > .tmp/c.json; python3 -c "\nimport json\nfor c in json.load(open('.tmp/c.json')):\n    print(c['id'], repr(c['body'][150:260]))\n"; rm -rf ./.tmp/c.json`,
+		],
+		["single-quoted braces", `jq '{a: .b}' f.json; rm -rf .tmp/x`],
+		["single-quoted dollar target is literal", `rm -rf '.tmp/$x'`],
 	];
 	test.each(allowed)("auto-allows: %s", (_l, command) => {
 		expect(matchedRule(command, root)).toBeUndefined();
@@ -136,6 +148,12 @@ describe("permission-gate: recursive rm scoped to cwd", () => {
 		["home", "rm -rf ~/x"],
 		["variable", "rm -rf $DIR/x"],
 		["subshell", "rm -rf $(pwd)/x"],
+		["double-quoted variable target", `rm -rf "$HOME"`],
+		["double-quoted subshell target", `rm -rf "$(pwd)/x"`],
+		["double-quoted backtick elsewhere", 'echo "`cd /`"; rm -rf .tmp/x'],
+		["brace group cd", "{ cd /; rm -rf x; }"],
+		["subshell cd", "(cd /; rm -rf x)"],
+		["bash -c with subshell", `bash -c "cd $(echo /); rm -rf x"`],
 		["xargs", "find . -name x | xargs rm -rf"],
 		["find -exec", "find . -exec rm -rf {} +"],
 		["bash -c", `bash -c "rm -rf build"`],
@@ -145,6 +163,12 @@ describe("permission-gate: recursive rm scoped to cwd", () => {
 		["symlink escape", "rm -rf escape/"],
 		[".git", "rm -rf .git"],
 		["no targets", "rm -rf"],
+		["heredoc fed to bash", "bash <<'EOF'\necho hi\nEOF\nrm -rf .tmp/x"],
+		["heredoc piped to sh", "cat <<'EOF' | sh\necho hi\nEOF\nrm -rf .tmp/x"],
+		["rm -rf inside heredoc body", "python3 - <<'EOF'\nos.system('rm -rf ~')\nEOF\nrm -rf .tmp/x"],
+		["unquoted heredoc with expansion", "cat <<EOF > .tmp/a\n$(whoami)\nEOF\nrm -rf .tmp/x"],
+		["unterminated heredoc", "cat <<'EOF'\nabc\nrm -rf .tmp/x"],
+		["heredoc then outside target", "python3 - <<'EOF'\nprint(1)\nEOF\nrm -rf /tmp/x"],
 	];
 	test.each(prompted)("still prompts: %s", (_l, command) => {
 		expect(matchedRule(command, root)?.id).toBe("existing.rm-recursive");

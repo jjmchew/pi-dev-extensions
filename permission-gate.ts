@@ -31,7 +31,9 @@ type PermissionRule = {
 const SHELL_WRAPPER_BEFORE_QUOTE = /(?:\b(?:sh|bash|zsh|fish)\s+-\w*c\w*|\beval)\s*$/;
 
 // Replace '...' and "..." with "" (except shell-wrapper args, which are recursed).
-export function stripQuotedText(command: string): string {
+// With keepExpanding, double-quoted strings containing `$` or a backtick are kept
+// verbatim, since the shell still expands them.
+export function stripQuotedText(command: string, keepExpanding = false): string {
   let out = "";
   let i = 0;
   while (i < command.length) {
@@ -48,7 +50,9 @@ export function stripQuotedText(command: string): string {
         j++;
       }
       const inner = command.slice(i + 1, j);
-      out += SHELL_WRAPPER_BEFORE_QUOTE.test(out) ? ` ${stripQuotedText(inner)} ` : '""';
+      if (SHELL_WRAPPER_BEFORE_QUOTE.test(out)) out += ` ${stripQuotedText(inner, keepExpanding)} `;
+      else if (keepExpanding && ch === '"' && /[$`]/.test(inner)) out += command.slice(i, j + 1);
+      else out += '""';
       i = j + 1;
       continue;
     }
@@ -158,11 +162,54 @@ function rmTargetIsScoped(target: string, curCwd: string, root: string): boolean
   return realParent !== undefined && isInsideOrSame(realRoot, realParent);
 }
 
+// `<<WORD`, `<<-'WORD'`, `<<"WORD"`, `<<\WORD` (not `<<<` here-strings).
+const HEREDOC_OP = /(?<!<)<<(?!<)(-?)[ \t]*(?:'([^'\n]+)'|"([^"\n]+)"|(\\?)([A-Za-z_][\w.-]*))/g;
+// Commands that could execute a heredoc body (or piped stdin) as shell code.
+const SHELL_CONSUMER = /(?:^|[\s;&|(/])(?:(?:ba|z|da|k|fi)?sh|eval|source|xargs)(?=[\s;&|)]|$)|(?:^|[;&|\n])\s*\.\s/;
+
+// Heredoc bodies are data (python/node scripts, file contents), not shell code,
+// but their quotes/braces/`$` defeat the rm scope analysis. Returns `command`
+// with bodies removed, or undefined when that isn't provably safe: a body that
+// mentions a recursive rm, an unquoted-delimiter body with `$`/backtick
+// expansion, a shell that could execute the body, or an unterminated heredoc.
+export function stripHeredocBodies(command: string): string | undefined {
+  if (!command.includes("<<")) return command;
+  const lines = command.split("\n");
+  const kept: string[] = [];
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i++];
+    kept.push(line);
+    for (const m of line.matchAll(HEREDOC_OP)) {
+      const [, dash, single, double, backslash, bare] = m;
+      const delim = single ?? double ?? bare;
+      const quoted = single !== undefined || double !== undefined || backslash === "\\";
+      const body: string[] = [];
+      for (;;) {
+        if (i >= lines.length) return undefined;
+        const l = lines[i++];
+        if ((dash ? l.replace(/^\t+/, "") : l) === delim) break;
+        body.push(l);
+      }
+      const text = body.join("\n");
+      if (RM_RECURSIVE_PATTERN.test(text)) return undefined;
+      if (!quoted && /[$`]/.test(text)) return undefined;
+    }
+  }
+  const stripped = kept.join("\n");
+  return SHELL_CONSUMER.test(stripped) ? undefined : stripped;
+}
+
 // True when every recursive rm in `command` only targets paths strictly inside
 // `cwd`. Tracks literal `cd <dir>`; bails on anything it can't resolve
 // (vars, subshells, xargs/find -exec/bash -c wrappers, pushd, etc.).
-export function isScopedRecursiveRm(command: string, cwd: string): boolean {
-  if (!cwd || UNRESOLVABLE_SYNTAX.test(command)) return false;
+export function isScopedRecursiveRm(rawCommand: string, cwd: string): boolean {
+  const command = stripHeredocBodies(rawCommand);
+  // Check shell-visible syntax only: literal quoted text (e.g. a `python3 -c "…"`
+  // script) can't affect where rm points.
+  if (!cwd || command === undefined || UNRESOLVABLE_SYNTAX.test(stripQuotedText(command, true))) {
+    return false;
+  }
   const segments = tokenizeSegments(command);
   if (!segments) return false;
 
