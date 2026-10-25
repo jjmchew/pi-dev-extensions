@@ -19,6 +19,7 @@ import { registerActiveRun, unregisterActiveRun } from "../core/active-runs.ts";
 import { executeRun, type ExecuteResult } from "../core/execute.ts";
 import { TuiReporter, fmtMs, statusGlyph } from "../reporters/tui.ts";
 import type { Plan, Reporter } from "../core/types.ts";
+import { widgetContent } from "../core/widget-lifecycle.ts";
 import { parseArgs, say, type CmdCtx } from "./ctx.ts";
 
 export const RUN_FLAGS = ["runs-dir", "timeout", "json"];
@@ -81,7 +82,10 @@ export async function runCommand(argsInput: string, ctx: CmdCtx): Promise<void> 
     onPlan: (p) => {
       plan = p;
       if (!useTui) return;
-      tui = new TuiReporter({ setWidget: (id, lines) => ctx.ui.setWidget?.(id, lines) }, p);
+      tui = new TuiReporter(
+        { setWidget: (id, lines) => ctx.ui.setWidget?.(id, lines && (widgetContent(lines) as string[])) },
+        p,
+      );
       reporters.push(tui);
     },
   });

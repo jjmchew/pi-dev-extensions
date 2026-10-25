@@ -45,7 +45,7 @@
  * Linux also requires: bubblewrap, socat, ripgrep
  */
 
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -79,15 +79,35 @@ function sshDenyRead(): string[] {
 	return deny;
 }
 
-// Allow the ssh-agent socket so SSH auth works without reading key files.
-function sshAgentSockets(): string[] {
-	const sock = process.env.SSH_AUTH_SOCK;
-	if (!sock) return [];
+// IdentityAgent resolved by ssh config (e.g. 1Password's agent.sock), which
+// overrides SSH_AUTH_SOCK when set.
+function sshIdentityAgent(): string | undefined {
 	try {
-		return [realpathSync(sock)];
+		const out = execFileSync("ssh", ["-G", "github.com"], {
+			encoding: "utf-8",
+			timeout: 5000,
+			stdio: ["ignore", "pipe", "ignore"],
+		});
+		const line = out.split("\n").find((l) => l.toLowerCase().startsWith("identityagent "));
+		const value = line?.slice("identityagent ".length).trim().replace(/^"|"$/g, "");
+		if (!value || value === "none" || value === "SSH_AUTH_SOCK") return undefined;
+		return value.replace(/^~(?=\/)/, homedir());
 	} catch {
-		return [sock];
+		return undefined;
 	}
+}
+
+// Allow the ssh-agent socket(s) so SSH auth works without reading key files.
+function sshAgentSockets(): string[] {
+	const socks = [process.env.SSH_AUTH_SOCK, sshIdentityAgent()].filter((s): s is string => !!s);
+	const resolved = socks.map((s) => {
+		try {
+			return realpathSync(s);
+		} catch {
+			return s;
+		}
+	});
+	return [...new Set(resolved)];
 }
 
 const DEFAULT_CONFIG: SandboxConfig = {
@@ -155,14 +175,22 @@ function deepMerge(base: SandboxConfig, overrides: Partial<SandboxConfig>): Sand
 	const extOverrides = overrides as {
 		ignoreViolations?: Record<string, string[]>;
 		enableWeakerNestedSandbox?: boolean;
+		enableWeakerNetworkIsolation?: boolean;
 	};
-	const extResult = result as { ignoreViolations?: Record<string, string[]>; enableWeakerNestedSandbox?: boolean };
+	const extResult = result as {
+		ignoreViolations?: Record<string, string[]>;
+		enableWeakerNestedSandbox?: boolean;
+		enableWeakerNetworkIsolation?: boolean;
+	};
 
 	if (extOverrides.ignoreViolations) {
 		extResult.ignoreViolations = extOverrides.ignoreViolations;
 	}
 	if (extOverrides.enableWeakerNestedSandbox !== undefined) {
 		extResult.enableWeakerNestedSandbox = extOverrides.enableWeakerNestedSandbox;
+	}
+	if (extOverrides.enableWeakerNetworkIsolation !== undefined) {
+		extResult.enableWeakerNetworkIsolation = extOverrides.enableWeakerNetworkIsolation;
 	}
 
 	return result;
@@ -308,6 +336,7 @@ export default function (pi: ExtensionAPI) {
 			const configExt = config as unknown as {
 				ignoreViolations?: Record<string, string[]>;
 				enableWeakerNestedSandbox?: boolean;
+				enableWeakerNetworkIsolation?: boolean;
 			};
 
 			await SandboxManager.initialize({
@@ -315,6 +344,8 @@ export default function (pi: ExtensionAPI) {
 				filesystem: config.filesystem,
 				ignoreViolations: configExt.ignoreViolations,
 				enableWeakerNestedSandbox: configExt.enableWeakerNestedSandbox,
+				// Allows com.apple.trustd.agent so Go binaries (gh, etc.) can verify TLS certs on macOS.
+				enableWeakerNetworkIsolation: configExt.enableWeakerNetworkIsolation,
 			});
 
 			sandboxEnabled = true;

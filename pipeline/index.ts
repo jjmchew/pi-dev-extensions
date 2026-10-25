@@ -9,6 +9,7 @@
  * See README.md for the YAML reference and the on-disk run layout.
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { Container, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 
 import { chatCommand } from "./commands/chat.ts";
@@ -26,13 +27,20 @@ import { defaultRunsDir, resolveRunsDir } from "./core/runsDir.ts";
 import { pipelineSettings } from "./core/settings.ts";
 import { abortAllActiveRuns } from "./core/active-runs.ts";
 import { installChatWidgets } from "./core/chat-widget.ts";
-import { bindSetWidget, clearAll, clearPending } from "./core/widget-lifecycle.ts";
+import { bindSetWidget, bindWidgetContent, clearAll, clearPending } from "./core/widget-lifecycle.ts";
 import { llmExecutor } from "./executors/llm.ts";
 import { shellExecutor } from "./executors/shell.ts";
 import { yamlParser, ymlParser } from "./parsers/yaml.ts";
 import type { CmdCtx } from "./commands/ctx.ts";
 
 export default function (pi: ExtensionAPI) {
+  // Same rendering pi uses for string-array widgets, minus its 10-line cap.
+  bindWidgetContent((lines) => () => {
+    const container = new Container();
+    for (const line of lines) container.addChild(new Text(line, 1, 0));
+    return container;
+  });
+
   // ─── registries ─────────────────────────────────────────────────────────
   // Executors first: the YAML parser asks the registry which keys are step
   // kinds, so anything registered here becomes usable in pipeline files.

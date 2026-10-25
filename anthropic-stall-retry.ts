@@ -7,8 +7,8 @@
  * model context, so the retry sees the same transcript plus that note.
  *
  * Tuning (env vars):
- *   PI_ANTHROPIC_STALL_HEADERS_MS  wait for response headers   (default 60000)
- *   PI_ANTHROPIC_STALL_IDLE_MS     max gap between stream events (default 90000)
+ *   PI_ANTHROPIC_STALL_HEADERS_MS  wait for response headers   (default 45000)
+ *   PI_ANTHROPIC_STALL_IDLE_MS     max gap between stream events (default 67500)
  *   PI_ANTHROPIC_STALL_MAX_RETRIES retries per user prompt        (default 3)
  *
  * /stall-retry toggles the extension for the current session.
@@ -17,8 +17,8 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 const num = (v: string | undefined, d: number) => (v && Number.isFinite(Number(v)) ? Number(v) : d);
-const HEADERS_MS = num(process.env.PI_ANTHROPIC_STALL_HEADERS_MS, 60_000);
-const IDLE_MS = num(process.env.PI_ANTHROPIC_STALL_IDLE_MS, 90_000);
+const HEADERS_MS = num(process.env.PI_ANTHROPIC_STALL_HEADERS_MS, 45_000);
+const IDLE_MS = num(process.env.PI_ANTHROPIC_STALL_IDLE_MS, 67_500);
 const MAX_RETRIES = num(process.env.PI_ANTHROPIC_STALL_MAX_RETRIES, 3);
 const MSG_TYPE = "anthropic-stall-retry";
 

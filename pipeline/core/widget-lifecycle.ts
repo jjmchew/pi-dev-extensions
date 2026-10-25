@@ -12,15 +12,29 @@
  * process-wide state that outlives it.
  */
 
-export type SetWidget = (id: string, lines: string[] | undefined) => void;
+export type SetWidget = (id: string, content: any) => void;
 
 let setWidgetImpl: SetWidget | undefined;
+let toContent: (lines: string[]) => unknown = (lines) => lines;
 const active = new Set<string>();
 const pendingClear = new Set<string>();
 
 /** Bind the host's setWidget once we have an ExtensionContext (session_start). */
 export function bindSetWidget(fn: SetWidget | undefined): void {
   setWidgetImpl = fn;
+}
+
+/**
+ * Convert widget lines into what the host's setWidget receives. pi caps plain
+ * string arrays at 10 lines ("... (widget truncated)"), so index.ts binds a
+ * component factory here; tests leave the identity default.
+ */
+export function bindWidgetContent(fn: (lines: string[]) => unknown): void {
+  toContent = fn;
+}
+
+export function widgetContent(lines: string[]): unknown {
+  return toContent(lines);
 }
 
 /** Called when a TuiReporter starts drawing. */
@@ -50,7 +64,7 @@ export function setPipelineWidget(id: string, lines: string[] | undefined): void
   }
   active.add(id);
   pendingClear.delete(id);
-  setWidgetImpl?.(id, lines);
+  setWidgetImpl?.(id, toContent(lines));
 }
 
 /** Called from the input hook. Clears anything marked pending. */
@@ -74,6 +88,7 @@ export function clearAll(): { cleared: number } {
 /** For tests. */
 export function _resetForTests(): void {
   setWidgetImpl = undefined;
+  toContent = (lines) => lines;
   active.clear();
   pendingClear.clear();
 }
